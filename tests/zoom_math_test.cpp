@@ -22,4 +22,21 @@ int main() {
                   1.F) < 0.0001F);
   assert(std::abs(scrollZoom(1.06F, 2.F, 0.01F, 1.F, 40.F, 1.05F, false) -
                   1.F) < 0.0001F);
+
+  using MacOSZoom::momentumStep;
+  const auto coastOut = momentumStep(1.2F, -1.F, 0.1F, 240.F,
+                                     1.F, 40.F, 1.05F);
+  assert(coastOut.zoom < 1.2F && coastOut.zoom > 1.F);
+  assert(coastOut.velocity < 0.F && coastOut.velocity > -1.F);
+  const auto settle = momentumStep(coastOut.zoom, coastOut.velocity, 0.2F,
+                                    240.F, 1.F, 40.F, 1.05F);
+  assert(settle.zoom == 1.F && settle.velocity == 0.F);
+  const auto coastIn = momentumStep(2.F, 1.F, 0.1F, 240.F,
+                                    1.F, 40.F, 1.05F);
+  assert(coastIn.zoom > 2.F && coastIn.velocity > 0.F);
+  const auto half = momentumStep(2.F, 1.F, 0.05F, 240.F,
+                                 1.F, 40.F, 1.05F);
+  const auto whole = momentumStep(half.zoom, half.velocity, 0.05F, 240.F,
+                                  1.F, 40.F, 1.05F);
+  assert(std::abs(coastIn.zoom - whole.zoom) < 0.0001F);
 }

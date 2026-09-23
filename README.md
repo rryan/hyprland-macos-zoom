@@ -112,6 +112,10 @@ All options live below `plugin.macos_zoom` in Lua config:
 - `modifier`: modifier for raw scrolling; default `CTRL`.
 - `sensitivity`: linear factor change per raw axis unit; default `0.01`.
 - `invert_scroll`: reverse only the modifier-scroll zoom direction, leaving normal scrolling unchanged; default `false`.
+- `momentum`: continue zooming after a touchpad scroll ends; default `true` (wheel scrolling stays discrete).
+- `momentum_strength`: multiply the initial coast speed; default `1.0`, set to `0` for no coast. Increase for a longer flick.
+- `momentum_decay_ms`: exponential coast time constant in milliseconds; default `240`. Increase for a longer-lasting coast.
+- `momentum_max_speed`: cap the coast speed in zoom factors per second; default `12.0`.
 - `consume_scroll`: prevent the modified gesture from also scrolling the app; default `true`.
 - `step`: multiplicative change used by the optional discrete `in`/`out` actions; default `1.20`.
 - `min_factor`: lower bound; default `1.0`.

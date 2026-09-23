@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <sstream>
 #include <string>
@@ -15,6 +16,7 @@
 #include <hyprland/src/config/values/types/StringValue.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
@@ -35,14 +37,84 @@ struct SConfig {
   SP<Config::Values::CFloatValue> snapThreshold;
   SP<Config::Values::CFloatValue> toggleFactor;
   SP<Config::Values::CFloatValue> sensitivity;
+  SP<Config::Values::CFloatValue> momentumStrength;
+  SP<Config::Values::CFloatValue> momentumDecayMs;
+  SP<Config::Values::CFloatValue> momentumMaxSpeed;
   SP<Config::Values::CBoolValue> independentDisplays;
   SP<Config::Values::CBoolValue> rawScroll;
   SP<Config::Values::CBoolValue> invertScroll;
   SP<Config::Values::CBoolValue> consumeScroll;
+  SP<Config::Values::CBoolValue> momentum;
   SP<Config::Values::CStringValue> modifier;
 } config;
 
 std::unordered_map<MONITORID, float> previousZoom;
+
+struct SMomentum {
+  PHLMONITORREF monitor;
+  Time::steady_tp lastInput;
+  Time::steady_tp lastTick;
+  float velocity = 0.F;
+  bool hasInput = false;
+  bool coasting = false;
+  bool fingerEnded = false;
+} momentum;
+
+SP<CEventLoopTimer> momentumTimer;
+
+void setZoom(const PHLMONITOR &monitor, float target, bool remember,
+             bool immediate);
+
+void stopMomentum() {
+  momentum = {};
+  if (momentumTimer)
+    momentumTimer->updateTimeout(std::nullopt);
+}
+
+void tickMomentum(SP<CEventLoopTimer> timer, void*) {
+  using namespace std::chrono_literals;
+  const auto monitor = momentum.monitor.lock();
+  if (!config.momentum->value() || !monitor || !monitor->m_cursorZoom) {
+    stopMomentum();
+    return;
+  }
+
+  const auto now = Time::steadyNow();
+  if (!momentum.coasting) {
+    if (!momentum.fingerEnded && now - momentum.lastInput < 50ms) {
+      timer->updateTimeout(50ms - (now - momentum.lastInput));
+      return;
+    }
+    momentum.coasting = true;
+    momentum.velocity = std::clamp(
+        momentum.velocity * config.momentumStrength->value(),
+        -config.momentumMaxSpeed->value(), config.momentumMaxSpeed->value());
+    momentum.lastTick = now;
+  } else {
+    const auto seconds = std::min(
+        std::chrono::duration<float>(now - momentum.lastTick).count(), 0.05F);
+    momentum.lastTick = now;
+    const auto minimum = config.minimum->value();
+    const auto maximum = std::max(minimum, config.maximum->value());
+    const auto step = MacOSZoom::momentumStep(
+        monitor->m_cursorZoom->value(), momentum.velocity, seconds,
+        config.momentumDecayMs->value(), minimum, maximum,
+        config.snapThreshold->value());
+    momentum.velocity = step.velocity;
+    setZoom(monitor, step.zoom, false, true);
+  }
+
+  if (std::abs(momentum.velocity) < 0.05F) {
+    // At rest, settle a nearly unzoomed view exactly at 1x.
+    const auto minimum = config.minimum->value();
+    if (momentum.velocity < 0.F &&
+        monitor->m_cursorZoom->value() < config.snapThreshold->value())
+      setZoom(monitor, minimum, false, true);
+    stopMomentum();
+  } else {
+    timer->updateTimeout(16ms);
+  }
+}
 
 SDispatchResult failure(std::string message) {
   return {.success = false, .error = std::move(message)};
@@ -114,7 +186,7 @@ uint32_t modifierMask(std::string value) {
 
 void onRawAxis(IPointer::SAxisEvent event, Event::SCallbackInfo &info) {
   if (!config.rawScroll->value() ||
-      event.axis != WL_POINTER_AXIS_VERTICAL_SCROLL || event.delta == 0.0)
+      event.axis != WL_POINTER_AXIS_VERTICAL_SCROLL)
     return;
 
   constexpr uint32_t PRIMARY_MODIFIERS =
@@ -128,6 +200,19 @@ void onRawAxis(IPointer::SAxisEvent event, Event::SCallbackInfo &info) {
   if (!monitor || !monitor->m_cursorZoom)
     return;
 
+  if (event.delta == 0.0) {
+    // Finger-scroll stop events let the coast start without waiting for the
+    // inactivity timeout; wheels do not get synthetic momentum.
+    if (event.source == WL_POINTER_AXIS_SOURCE_FINGER &&
+        momentum.monitor.lock() == monitor && momentum.hasInput &&
+        !momentum.coasting) {
+      momentum.fingerEnded = true;
+      momentumTimer->updateTimeout(std::chrono::milliseconds(1));
+    }
+    info.cancelled = config.consumeScroll->value();
+    return;
+  }
+
   const auto minimum = config.minimum->value();
   const auto maximum = std::max(minimum, config.maximum->value());
   const auto sensitivity = config.sensitivity->value();
@@ -138,6 +223,33 @@ void onRawAxis(IPointer::SAxisEvent event, Event::SCallbackInfo &info) {
 
   setZoom(monitor, next, false, true);
   info.cancelled = config.consumeScroll->value();
+
+  if (!config.momentum->value() ||
+      event.source != WL_POINTER_AXIS_SOURCE_FINGER) {
+    stopMomentum();
+    return;
+  }
+
+  const auto now = Time::steadyNow();
+  const auto previous = momentum.monitor.lock();
+  const auto seconds = std::chrono::duration<float>(now - momentum.lastInput).count();
+  const auto zoomDelta = (config.invertScroll->value() ? 1.F : -1.F) *
+                         static_cast<float>(event.delta) * sensitivity;
+  if (previous == monitor && momentum.hasInput && !momentum.coasting &&
+      !momentum.fingerEnded && seconds > 0.F && seconds < 0.06F) {
+    const auto sample = zoomDelta / seconds;
+    momentum.velocity = sample * momentum.velocity > 0.F
+                            ? 0.5F * (momentum.velocity + sample)
+                            : sample;
+  } else {
+    momentum.velocity = 0.F;
+  }
+  momentum.monitor = monitor;
+  momentum.lastInput = now;
+  momentum.hasInput = true;
+  momentum.coasting = false;
+  momentum.fingerEnded = false;
+  momentumTimer->updateTimeout(std::chrono::milliseconds(50));
 }
 
 std::optional<float> parseFloat(std::string_view input) {
@@ -276,6 +388,18 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
   config.sensitivity = makeShared<Config::Values::CFloatValue>(
       "plugin:macos_zoom:sensitivity", "zoom factor change per raw axis unit",
       0.01F, Config::Values::SFloatValueOptions{.min = 0.0001F, .max = 1.F});
+  config.momentum = makeShared<Config::Values::CBoolValue>(
+      "plugin:macos_zoom:momentum", "coast after touchpad scrolling stops",
+      true);
+  config.momentumStrength = makeShared<Config::Values::CFloatValue>(
+      "plugin:macos_zoom:momentum_strength", "initial coast velocity multiplier",
+      1.F, Config::Values::SFloatValueOptions{.min = 0.F, .max = 4.F});
+  config.momentumDecayMs = makeShared<Config::Values::CFloatValue>(
+      "plugin:macos_zoom:momentum_decay_ms", "coast decay time constant in ms",
+      240.F, Config::Values::SFloatValueOptions{.min = 20.F, .max = 2000.F});
+  config.momentumMaxSpeed = makeShared<Config::Values::CFloatValue>(
+      "plugin:macos_zoom:momentum_max_speed", "maximum coast zoom factors per second",
+      12.F, Config::Values::SFloatValueOptions{.min = 0.1F, .max = 100.F});
   config.independentDisplays = makeShared<Config::Values::CBoolValue>(
       "plugin:macos_zoom:independent_displays",
       "zoom only the display under the pointer", true);
@@ -298,6 +422,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
   HyprlandAPI::addConfigValueV2(handle, config.snapThreshold);
   HyprlandAPI::addConfigValueV2(handle, config.toggleFactor);
   HyprlandAPI::addConfigValueV2(handle, config.sensitivity);
+  HyprlandAPI::addConfigValueV2(handle, config.momentum);
+  HyprlandAPI::addConfigValueV2(handle, config.momentumStrength);
+  HyprlandAPI::addConfigValueV2(handle, config.momentumDecayMs);
+  HyprlandAPI::addConfigValueV2(handle, config.momentumMaxSpeed);
   HyprlandAPI::addConfigValueV2(handle, config.independentDisplays);
   HyprlandAPI::addConfigValueV2(handle, config.rawScroll);
   HyprlandAPI::addConfigValueV2(handle, config.invertScroll);
@@ -308,6 +436,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     throw std::runtime_error("macos-zoom: failed to register dispatcher");
   if (!HyprlandAPI::addLuaFunction(handle, "macos_zoom", "adjust", luaAdjust))
     throw std::runtime_error("macos-zoom: failed to register Lua function");
+
+  momentumTimer = makeShared<CEventLoopTimer>(std::nullopt, tickMomentum, nullptr);
+  g_pEventLoopManager->addTimer(momentumTimer);
 
   static auto axisListener = Event::bus()->m_events.input.mouse.axis.listen(
       [](IPointer::SAxisEvent event, Event::SCallbackInfo &info) {
@@ -320,6 +451,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+  stopMomentum();
+  g_pEventLoopManager->removeTimer(momentumTimer);
+  momentumTimer.reset();
   resetAllMonitors();
   previousZoom.clear();
   pluginHandle = nullptr;

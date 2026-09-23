@@ -12,6 +12,10 @@ hl.config({
       modifier = "CTRL",
       sensitivity = 0.01,
       invert_scroll = false, -- true: reverse zoom without changing normal scrolling
+      momentum = true,
+      momentum_strength = 1.0,
+      momentum_decay_ms = 240.0,
+      momentum_max_speed = 12.0,
       consume_scroll = true,
       step = 1.20,
       min_factor = 1.0,
