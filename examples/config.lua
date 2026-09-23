@@ -11,6 +11,7 @@ hl.config({
       raw_scroll = true,
       modifier = "CTRL",
       sensitivity = 0.01,
+      invert_scroll = false, -- true: reverse zoom without changing normal scrolling
       consume_scroll = true,
       step = 1.20,
       min_factor = 1.0,

@@ -15,4 +15,13 @@ inline float boundedZoom(float current, float multiplier, float minimum,
   return next < snapThreshold ? minimum : next;
 }
 
+inline float scrollZoom(float current, float delta, float sensitivity,
+                        float minimum, float maximum, float snapThreshold,
+                        bool invertScroll) {
+  const auto zoomOutDelta = invertScroll ? -delta : delta;
+  const auto next = std::clamp(current - zoomOutDelta * sensitivity, minimum,
+                               maximum);
+  return zoomOutDelta > 0.F && next < snapThreshold ? minimum : next;
+}
+
 } // namespace MacOSZoom
