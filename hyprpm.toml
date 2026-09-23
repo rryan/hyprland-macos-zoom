@@ -2,7 +2,7 @@
 name = "hyprland-macos-zoom"
 authors = ["Anders Åstrand"]
 commit_pins = [
-    ["efb50993780079460b0cbed1363e2166a2de1d9f", "94d8c7a62cc28b46fbc3548ac7d558765640ea03"], # Hyprland 0.56.2 with invert_scroll
+    ["efb50993780079460b0cbed1363e2166a2de1d9f", "04478d4d044ed71a32fcad5df9372c9f70f8d1ba"], # Hyprland 0.56.2 with momentum
 ]
 
 [macos-zoom]
