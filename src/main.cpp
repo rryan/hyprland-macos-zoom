@@ -160,11 +160,11 @@ void setZoom(const PHLMONITOR &monitor, float target, bool remember = true,
     *monitor->m_cursorZoom = bounded;
 }
 
-uint32_t modifierMask(std::string value) {
+Input::ModifierMask modifierMask(std::string value) {
   std::ranges::transform(value, value.begin(),
                          [](unsigned char c) { return std::toupper(c); });
 
-  uint32_t mask = 0;
+  Input::ModifierMask mask = Input::HL_MODIFIER_NONE;
   std::string token;
   std::istringstream stream(value);
   while (std::getline(stream, token, '+')) {
@@ -172,14 +172,14 @@ uint32_t modifierMask(std::string value) {
                                [](unsigned char c) { return std::isspace(c); }),
                 token.end());
     if (token == "CTRL" || token == "CONTROL")
-      mask |= HL_MODIFIER_CTRL;
+      mask |= Input::HL_MODIFIER_CTRL;
     else if (token == "ALT" || token == "OPTION")
-      mask |= HL_MODIFIER_ALT;
+      mask |= Input::HL_MODIFIER_ALT;
     else if (token == "META" || token == "SUPER" || token == "COMMAND" ||
              token == "CMD")
-      mask |= HL_MODIFIER_META;
+      mask |= Input::HL_MODIFIER_META;
     else if (token == "SHIFT")
-      mask |= HL_MODIFIER_SHIFT;
+      mask |= Input::HL_MODIFIER_SHIFT;
   }
   return mask;
 }
@@ -189,11 +189,12 @@ void onRawAxis(IPointer::SAxisEvent event, Event::SCallbackInfo &info) {
       event.axis != WL_POINTER_AXIS_VERTICAL_SCROLL)
     return;
 
-  constexpr uint32_t PRIMARY_MODIFIERS =
-      HL_MODIFIER_SHIFT | HL_MODIFIER_CTRL | HL_MODIFIER_ALT | HL_MODIFIER_META;
+  constexpr Input::ModifierMask PRIMARY_MODIFIERS =
+      Input::HL_MODIFIER_SHIFT | Input::HL_MODIFIER_CTRL |
+      Input::HL_MODIFIER_ALT | Input::HL_MODIFIER_META;
   const auto required = modifierMask(config.modifier->value());
   const auto active = g_pInputManager->getModsFromAllKBs() & PRIMARY_MODIFIERS;
-  if (required == 0 || active != required)
+  if (!required || active != required)
     return;
 
   const auto monitor = monitorUnderPointer();
@@ -432,8 +433,6 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
   HyprlandAPI::addConfigValueV2(handle, config.consumeScroll);
   HyprlandAPI::addConfigValueV2(handle, config.modifier);
 
-  if (!HyprlandAPI::addDispatcherV2(handle, "macos-zoom", adjustZoom))
-    throw std::runtime_error("macos-zoom: failed to register dispatcher");
   if (!HyprlandAPI::addLuaFunction(handle, "macos_zoom", "adjust", luaAdjust))
     throw std::runtime_error("macos-zoom: failed to register Lua function");
 

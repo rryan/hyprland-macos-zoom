@@ -18,9 +18,11 @@ per-scroll subprocess is involved.
 
 ## Requirements
 
-- Hyprland 0.56.2 or a source-compatible build with matching installed headers.
+- Hyprland 0.57.0 or a source-compatible build with matching installed headers.
+  Hyprland 0.56.2 is served by a `hyprpm` commit pin.
+- Hyprland’s Lua configuration. Hyprland 0.57 no longer supports plugin
+  dispatchers, so zoom actions are exposed only through `hl.plugin.macos_zoom.adjust`.
 - CMake 3.27+, a C++23 compiler, `pkg-config`, and Hyprland build dependencies.
-- Hyprland’s Lua configuration for the provided examples.
 
 Hyprland plugins are ABI-coupled to the compositor build. Rebuild after every Hyprland update.
 
@@ -73,9 +75,6 @@ hyprctl eval "hl.plugin.macos_zoom.adjust('toggle')"
 hyprctl eval "hl.plugin.macos_zoom.adjust('reset')"
 hyprctl eval "hl.plugin.macos_zoom.adjust('set 3.5')"
 ```
-
-The native `macos-zoom` dispatcher is also registered for legacy Hyprland
-configurations. Lua configurations should use the Lua API shown above.
 
 Unload with an absolute path; unloading resets every output to 1×.
 
